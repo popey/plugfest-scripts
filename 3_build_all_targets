@@ -105,7 +105,7 @@ build_opencv() {
     set -e
     source .venv/bin/activate
     mkdir -p build
-    cd build
+    pushd build || exit
     cmake .. -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF \
         -DCMAKE_INSTALL_PREFIX=${repo_path}/usr/local/opt/opencv \
@@ -114,6 +114,8 @@ build_opencv() {
         -DBUILD_PERF_TESTS=OFF -DBUILD_TESTS=OFF \
         -DBUILD_JAVA=OFF -DBUILD_OBJC=OFF -DBUILD_FAT_JAVA_LIB=OFF -DBUILD_KOTLIN_EXTENSIONS=OFF \
         -DWITH_IPP=OFF
+    make -j $(nproc) install
+    popd || exit
 }
 
 build_hexyl() {

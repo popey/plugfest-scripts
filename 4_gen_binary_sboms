@@ -195,7 +195,7 @@ sbom_all() {
                 generate_binary_sboms_dir "$repo_path" "build/libs"
                 ;;
             "./opencv/opencv")
-                generate_binary_sboms_dir "$repo_path" "${repo_path}/usr/local/opt/opencv"
+                generate_binary_sboms_dir "$repo_path" "usr/local/opt/opencv"
                 ;;
             "./sharkdp/hexyl")
                 generate_binary_sboms_dir "$repo_path" "target/release"

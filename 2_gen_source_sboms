@@ -38,7 +38,6 @@ PLUG_JQ_CMD="${PLUG_JQ_CMD:-/usr/bin/jq}"
 # Location of the xmllint binary
 PLUG_XMLLINT_CMD="${PLUG_XMLLINT_CMD:-/usr/bin/xmllint}"
 
-
 # SBOM formats to generate
 PLUG_SBOM_FORMATS=(
     "cyclonedx-json"
