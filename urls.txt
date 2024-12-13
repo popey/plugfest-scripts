@@ -1,0 +1,9 @@
+https://github.com/snyk-labs/nodejs-goof/commit/d240896711e31c540fc1cab79ae2e4cf63f00b1a
+https://github.com/httpie/cli/commit/f4cf43ecdd6c5c52b5c4ba91086d5c6ccfebcd6d
+https://github.com/ldtteam/minecolonies/commit/7c184da03403649da9d2aec2194440f86c3a3c66
+https://github.com/opencv/opencv/commit/3919f33e21fd0783f67901ad3429101f9b39c798
+https://github.com/gin-gonic/gin/commit/f05f966a0824b1d302ee556183e2579c91954266
+https://github.com/sharkdp/hexyl/commit/427a5524e19cf951fe41c2da8b940ade3ec39848
+https://github.com/DependencyTrack/dependency-track/releases/tag/4.12.1
+https://github.com/PHPMailer/PHPMailer/commit/182f7b9158692ef602ed9cbd944b388e79961729
+https://github.com/jqlang/jq/commit/96e8d893c10ed2f7656ccb8cfa39a9a291663a7e

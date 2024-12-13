@@ -1,0 +1,126 @@
+#!/bin/bash
+# 
+# 1_get_targets
+# 2_gen_source_sboms
+# 3_build_all_targets
+# 4_gen_binary_sboms    
+# 5_validate_sboms      <- Use external tools to validate SBOMs
+
+# Location of pyspdxtools utility
+PLUG_PYSPDXTOOLS_CMD="${PLUG_PYSPDXTOOLS_CMD:-/home/alan/Work/Anchore/spdx-tools/.venv/bin/pyspdxtools}"
+
+# Location of sbom-utility utility
+PLUG_SBOM_UTILITY_CMD="${PLUG_SBOM_UTILITY_CMD:-/home/alan/Work/Anchore/sbom-utility/sbom-utility}"
+
+# Location of generated SBOMs
+PLUG_SBOMS_BASE="${PLUG_SBOMS_BASE:-$PWD/sboms}"
+
+# Location of summary report
+PLUG_VALIDATION_SUMMARY="${PLUG_VALIDATION_SUMMARY:-$PWD/sboms/README.md}"
+
+# We need Bash 4.x or newer for this script
+if ((BASH_VERSINFO[0] < 4)); then
+    echo "🚨 Sorry, you need bash 4.0 or newer to run this script."
+    exit 1
+fi
+
+# Catch ctrl+c because we don't want to have to stab it numerous times
+# to get out of all these nested scripts when things Go Bad(TM)
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+function ctrl_c() {
+    echo "💥 Trapped CTRL-C"
+    exit 99
+}
+
+###
+### FUNCTIONS
+###
+
+check_environment() {
+    echo "-- Check environment"
+    echo "-- Check for pyspdxtools"
+    if ! PLUG_PYSPDXTOOLS_BIN=$(command -v $PLUG_PYSPDXTOOLS_CMD); then
+        echo "🚨 pyspdxtools not found at $PLUG_PYSPDXTOOLS_CMD"
+        exit 1
+    fi
+    echo "-- Check for sbom-utility"
+    if ! PLUG_SBOM_UTILITY_BIN=$(command -v $PLUG_SBOM_UTILITY_CMD); then
+        echo "🚨 sbom-utility not found at $PLUG_SBOM_UTILITY_CMD"
+        exit 1
+    fi
+}
+
+validate_sboms() {
+    local type="$1"
+    echo "-- Type: $type"
+    # Loop through tools (likely just syft)
+    for tool in syft; do
+        echo "-- Tool: $tool"
+        for verpath in $(find "$PLUG_SBOMS_BASE"/"$type"/"$tool"/* -maxdepth 0 -type d); do
+            local version="$(basename $verpath)"
+            echo "-- Version: $version"
+            for projectpath in $(find "$PLUG_SBOMS_BASE"/"$type"/"$tool"/"$version"/*/* -maxdepth 0 -type d); do
+                local org_name=$(basename "$(dirname "$projectpath")")
+                local project="$(basename $projectpath)"
+                for spdxfiles in $(find "$PLUG_SBOMS_BASE"/"$type"/"$tool"/"$version"/"$org_name"/"$project"/spdx-json*.json -type f ); do
+                    local spdxfile=$(basename $spdxfiles)
+                    local pyspdxtools_file="$spdxfiles"_pyspdxtools.txt
+                    local sbom_utility_file="$spdxfiles"_sbom_utility.txt
+                    echo "-- Processing '$type' '$spdxfile' SBOM from $org_name/$project generated with $tool $version"
+                    # Run pyspdxtools
+                    $PLUG_PYSPDXTOOLS_BIN -i "$spdxfiles" > "$pyspdxtools_file" 2>&1
+                    local result="$?"
+                    # Write out summary
+                    write_summary_line "$type" "$project" "$tool" "$version" "[$spdxfile](./$type/$tool/$version/$org_name/$project/$spdxfile)" "[pyspdxtools](./$type/$tool/$version/$org_name/$project/$(basename $pyspdxtools_file))" "$(if [ $result == '0' ]; then echo 'Pass'; else echo 'Fail'; fi)"
+                    # Run sbom-utility
+                    $PLUG_SBOM_UTILITY_BIN validate -i "$spdxfiles" > "$sbom_utility_file" 2>&1
+                    local result="$?"
+                    # Write out summary
+                    write_summary_line "$type" "$project" "$tool" "$version" "[$spdxfile](./$type/$tool/$version/$org_name/$project/$spdxfile)" "[sbom-utility](./$type/$tool/$version/$org_name/$project/$(basename $sbom_utility_file))" "$(if [ $result == '0' ]; then echo 'Pass'; else echo 'Fail'; fi)"
+                done
+                for cylonedxfiles in $(find "$PLUG_SBOMS_BASE"/"$type"/"$tool"/"$version"/"$org_name"/"$project"/cyclonedx-*.json -type f | grep -v txt); do
+                    local cylonedxfile=$(basename $cylonedxfiles)
+                    local sbom_utility_file="$cylonedxfiles"_sbom_utility.txt
+                    echo "-- Processing '$type' '$cylonedxfile' SBOM from $org_name/$project generated with $tool $version"
+                    # Run sbom-utility
+                    $PLUG_SBOM_UTILITY_BIN validate -i "$cylonedxfiles" > "$sbom_utility_file" 2>&1
+                    local result="$?"
+                    # Write out summary
+                    write_summary_line "$type" "$project" "$tool" "$version" "[$cylonedxfile](./$type/$tool/$version/$org_name/$project/$cylonedxfile)" "[sbom-utility](./$type/$tool/$version/$org_name/$project/$(basename $sbom_utility_file))" "$(if [ $result == '0' ]; then echo 'Pass'; else echo 'Fail'; fi)"
+                done
+            done
+        done
+    done
+}
+
+start_summary_report() {
+    echo "| Type | Project | Tool | Ver | SBOM | Validator | Result |" > "$PLUG_VALIDATION_SUMMARY"
+    echo "| - | - | - | - | - | - | - |" >> "$PLUG_VALIDATION_SUMMARY"
+}
+
+write_summary_line() {
+    local type="$1"
+    local project="$2"
+    local tool="$3"
+    local ver="$4"
+    local file="$5"
+    local utility="$6"
+    local result="$7"
+    echo "| $1 | $2 | $3 | $4 | $5 | $6 | $7 |" >> "$PLUG_VALIDATION_SUMMARY"
+}
+
+###
+### MAIN
+###
+
+start_summary_report
+check_environment
+if [ -d "$PLUG_SBOMS_BASE"/source ]; then
+    echo "-- Validating source SBOMs"
+    validate_sboms source
+fi
+if [ -d "$PLUG_SBOMS_BASE"/binary ]; then
+    echo "-- Validating binary SBOMs"
+    validate_sboms binary
+fi

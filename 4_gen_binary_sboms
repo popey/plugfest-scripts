@@ -1,0 +1,217 @@
+#!/bin/bash
+# 
+# 1_get_targets
+# 2_gen_source_sboms
+# 3_build_all_targets
+# 4_gen_binary_sboms    <- Generate SBOMs from binary artifacts (optional)
+# 5_validate_sboms
+
+# We need Bash 4.x or newer for this script
+if ((BASH_VERSINFO[0] < 4)); then
+    echo "🚨 Sorry, you need bash 4.0 or newer to run this script."
+    exit 1
+fi
+
+# Catch ctrl+c because we don't want to have to stab it numerous times
+# to get out of all these nested scripts when things Go Bad(TM)
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+function ctrl_c() {
+    echo "💥 Trapped CTRL-C"
+    exit 99
+}
+
+# Location of the syft binary we're using in this run
+PLUG_SYFT_CMD="${PLUG_SYFT_CMD:-/home/alan/bin/syft}"
+
+# Location where the repos have been cloned
+PLUG_REPOS_DIR="${PLUG_REPOS_DIR:-$PWD/repos}"
+
+# Base location where sboms will be written
+PLUG_OUTPUT_BASE="${PLUG_OUTPUT_BASE:-$PWD/sboms/binary}"
+
+# Location of the jq binary
+PLUG_JQ_CMD="${PLUG_JQ_CMD:-/usr/bin/jq}"
+
+# Location of the xmllint binary
+PLUG_XMLLINT_CMD="${PLUG_XMLLINT_CMD:-/usr/bin/xmllint}"
+
+# SBOM formats to generate
+PLUG_SBOM_FORMATS=(
+    "cyclonedx-json"
+    "cyclonedx-xml"
+    "github-json"
+    "spdx-json"
+    "spdx-tag-value"
+    "syft-json"
+    "syft-table"
+    "syft-text"
+)
+
+###
+### FUNCTIONS
+###
+
+check_environment() {
+    echo "-- Check environment"
+    echo "-- Check for syft"
+    if ! PLUG_SYFT_BIN=$(command -v $PLUG_SYFT_CMD); then
+        echo "🚨 syft binary is not found at $PLUG_SYFT_CMD"
+        exit 1
+    fi
+    echo "-- Check for jq"
+    if ! PLUG_JQ_BIN=$(command -v $PLUG_JQ_CMD); then
+        echo "🚨 jq binary is not found at $PLUG_JQ_CMD"
+        exit 1
+    fi
+    echo "-- Check for xmllint"
+    if ! PLUG_XMLLINT_BIN=$(command -v $PLUG_XMLLINT_CMD); then
+        echo "🚨 xmllint binary is not found at $PLUG_XMLLINT_CMD"
+        exit 1
+    fi
+}
+
+setup_output_folder() {
+    # Get syft version for organizing output
+    SYFT_VERSION=$($PLUG_SYFT_BIN version | grep '^Version:' | awk '{print $2}')
+    # Base output directory
+    PLUG_OUTPUT_DIR="${PLUG_OUTPUT_BASE}/syft/${SYFT_VERSION}"
+    # Create output directory
+    mkdir -p "$PLUG_OUTPUT_DIR"
+}
+
+# Function to generate SBOM with given parameters
+generate_sbom() {
+    local repo_path=$1
+    local output_dir=$2
+    local format=$3
+    local enrich=$4
+    local binary=$5
+    local noslashbinary=$(echo $binary | tr -d "/")
+    local repo_name=$(basename "$repo_path")
+    local enriched_suffix=""
+    local enrich_flag=""
+    
+    if [ "$enrich" = true ]; then
+        enriched_suffix="_enriched"
+        enrich_flag="--enrich all"
+    fi
+    
+    #local output_file="${output_dir}/syft_${SYFT_VERSION}_${noslashbinary}_${format}${enriched_suffix}.${format#*-}"
+    local output_file="${output_dir}/${format}${enriched_suffix}.${format#*-}"
+    
+    echo "-- Generating ${format}${enriched_suffix} SBOM for ${repo_name}"
+    # If it's one of the JSON formats, let's pipe it through jq to pretty up the file
+    if [[ $format == *"json"* ]]; then
+        "$PLUG_SYFT_BIN" dir:"$repo_path" -o "$format" $enrich_flag | "$PLUG_JQ_BIN" . > "$output_file"
+    else
+        "$PLUG_SYFT_BIN" dir:"$repo_path" -o "$format=$output_file" $enrich_flag 
+    fi
+}
+
+# Function to generate SBOM with given parameters for a container
+generate_sbom_container() {
+    local repo_path=$1
+    local output_dir=$2
+    local format=$3
+    local enrich=$4
+    local container=$5
+    local noslashcontainer=$(echo $container | tr -d "/")
+    local repo_name=$(basename "$repo_path")
+    local enriched_suffix=""
+    local enrich_flag=""
+    
+    if [ "$enrich" = true ]; then
+        enriched_suffix="_enriched"
+        enrich_flag="--enrich all"
+    fi
+    
+    #local output_file="${output_dir}/syft_${SYFT_VERSION}_${noslashcontainer}_${format}${enriched_suffix}.${format#*-}"
+    local output_file="${output_dir}/${format}${enriched_suffix}.${format#*-}"
+    
+    echo "-- Generating ${format}${enriched_suffix} SBOM for ${repo_name}"
+    # If it's one of the JSON formats, let's pipe it through jq to pretty up the file
+    if [[ $format == *"json"* ]]; then
+        "$PLUG_SYFT_BIN" docker:"$container" -o "$format" $enrich_flag | "$PLUG_JQ_BIN" . > "$output_file"
+    elif  [[ $format == *"xml"* ]]; then
+        "$PLUG_SYFT_BIN" docker:"$repo_path" -o "$format" $enrich_flag | "$PLUG_XMLLINT_BIN" --format - > "$output_file"
+    else
+        "$PLUG_SYFT_BIN" docker:"$container" -o "$format=$output_file" $enrich_flag 
+    fi
+}
+
+generate_binary_sboms_dir() {
+    local repo_path=$1
+    local directory=$2
+    local noslashdirectory=$(echo $directory | tr "/" "_")
+
+    repo_name=$(basename "$repo_path")
+    repo_output_dir="${PLUG_OUTPUT_DIR}/${repo_name}/${noslashdirectory}"
+    mkdir -p "$repo_output_dir"
+    
+    # Generate SBOMs for each format, with and without enrichment
+    for format in "${PLUG_SBOM_FORMATS[@]}"; do
+        generate_sbom "$repo_path" "$repo_output_dir" "$format" false "$directory"
+        generate_sbom "$repo_path" "$repo_output_dir" "$format" true "$directory"
+    done
+    
+    echo "-- Completed SBOMs for $repo_name"
+}
+
+generate_binary_sboms_docker() {
+    local repo_path=$1
+    local container=$2
+    local noslashcontainer=$(echo $container | tr -d "/")
+
+    repo_name=$(basename "$repo_path")
+    repo_output_dir="${PLUG_OUTPUT_DIR}/${repo_name}/${noslashcontainer}"
+    mkdir -p "$repo_output_dir"
+    
+    # Generate SBOMs for each format, with and without enrichment
+    for format in "${PLUG_SBOM_FORMATS[@]}"; do
+        generate_sbom_container "$repo_path" "$repo_output_dir" "$format" false "$container"
+        generate_sbom_container "$repo_path" "$repo_output_dir" "$format" true "$container"
+    done
+    
+    echo "-- Completed SBOMs for $repo_name"
+}
+
+sbom_all() {
+    pushd "$PLUG_REPOS_DIR" || exit
+    for repo_path in ./*/*; do
+        echo "-- SBOM binary for $(basename $repo_path)"
+        case $repo_path in
+            "./DependencyTrack/dependency-track")
+                generate_binary_sboms_docker "$repo_path" "dependencytrack/apiserver"
+                generate_binary_sboms_docker "$repo_path" "dependencytrack/frontend"
+                ;;
+            "./httpie/cli")
+                generate_binary_sboms_dir "$repo_path" "."
+                ;;
+            "./jqlang/jq")
+                generate_binary_sboms_docker "$repo_path" plug-jq
+                ;;
+            "./ldtteam/minecolonies")
+                generate_binary_sboms_dir "$repo_path" "build/libs"
+                ;;
+            "./opencv/opencv")
+                generate_binary_sboms_dir "$repo_path" "${repo_path}/usr/local/opt/opencv"
+                ;;
+            "./sharkdp/hexyl")
+                generate_binary_sboms_dir "$repo_path" "target/release"
+                ;;
+            "./snyk-labs/nodejs-goof")
+                generate_binary_sboms_docker "$repo_path" plug-nodejs-goof
+                ;;
+        esac
+    done
+    popd || exit
+}
+
+###
+### MAIN
+###
+
+check_environment
+setup_output_folder
+sbom_all

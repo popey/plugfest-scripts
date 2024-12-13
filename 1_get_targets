@@ -1,0 +1,113 @@
+#!/bin/bash
+# 
+# 1_get_targets         <- Grab all the source code we will sbom
+# 2_gen_source_sboms
+# 3_build_all_targets
+# 4_gen_binary_sboms
+# 5_validate_sboms
+
+# https://resources.sei.cmu.edu/news-events/events/sbom/participate.cfm
+
+# We need Bash 4.x or newer for this script
+if ((BASH_VERSINFO[0] < 4)); then
+    echo "🚨 Sorry, you need bash 4.0 or newer to run this script."
+    exit 1
+fi
+
+# Catch ctrl+c because we don't want to have to stab it numerous times
+# to get out of all these nested scripts when things Go Bad(TM)
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+function ctrl_c() {
+    echo "💥 Trapped CTRL-C"
+    exit 99
+}
+
+# The location where the repos will be cloned
+PLUG_REPOS_DIR="${PLUG_REPOS_DIR:-$PWD/repos}"
+
+# The location of the git binary
+PLUG_GIT_CMD="${PLUG_GIT_CMD:-/usr/bin/git}"
+
+# Text file containing list of repos to clone
+PLUG_URL_LIST="${PLUG_URL_LIST:-$PWD/urls.txt}"
+
+# Create a directory for all repos
+mkdir -p "$PLUG_REPOS_DIR"
+
+###
+### FUNCTIONS
+###
+
+check_environment() {
+    echo "-- Check environment"
+    echo "-- Check for git"
+    if ! PLUG_GIT_BIN=$(command -v $PLUG_GIT_CMD); then
+        echo "🚨 git binary is not found at $PLUG_GIT_CMD"
+        exit 1
+    fi
+}
+
+# Function to extract owner, repo, type and reference from GitHub URL
+parse_github_url() {
+    local url=$1
+    local owner=$(echo $url | cut -d'/' -f4)
+    local repo=$(echo $url | cut -d'/' -f5)
+    local type=$(echo $url | cut -d'/' -f6)
+    local ref=$(echo $url | cut -d'/' -f7)
+    
+    # Handle releases/tag URLs differently
+    if [[ $type == "releases" ]]; then
+        type="tag"
+        ref=$(echo $url | cut -d'/' -f8)
+    fi
+    
+    echo "$owner $repo $type $ref"
+}
+
+get_all() {
+    # Read URLs from urls.txt
+    while IFS= read -r url || [[ -n "$url" ]]; do
+        # Skip empty lines
+        [[ -z "$url" ]] && continue
+        
+        # Parse URL
+        read -r owner repo type ref <<< $(parse_github_url "$url")
+        
+        echo "-- Processing: $owner/$repo ($type: $ref)"
+        
+        # Create directory for org
+        dir_name="${owner}"
+        mkdir -p "$dir_name"
+        pushd "$dir_name"  > /dev/null || exit
+        
+        # Clone repository
+        $PLUG_GIT_BIN clone --quiet "https://github.com/$owner/$repo"
+
+        # Step into repo directory
+        pushd "$repo"  > /dev/null || exit
+
+        # Fetch latest changes
+        $PLUG_GIT_BIN fetch --all --quiet
+        
+        # Checkout specific commit or tag
+        if [ "$type" = "commit" ]; then
+            $PLUG_GIT_BIN checkout --quiet "$ref"
+        elif [ "$type" = "tag" ]; then
+            $PLUG_GIT_BIN checkout --quiet "tags/$ref"
+        fi
+        
+        popd  > /dev/null || exit
+        popd  > /dev/null || exit
+        echo "-- Completed: $owner/$repo"
+    done < "$PLUG_URL_LIST"
+}
+
+###
+### MAIN
+###
+
+check_environment
+pushd "$PLUG_REPOS_DIR"  > /dev/null || exit
+get_all
+popd  > /dev/null || exit

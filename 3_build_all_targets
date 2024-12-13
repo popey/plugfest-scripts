@@ -1,0 +1,172 @@
+#!/bin/bash
+# 
+# 1_get_targets
+# 2_gen_source_sboms
+# 3_build_all_targets   <- Attempt to build binary artifacts or containers
+# 4_gen_binary_sboms
+# 5_validate_sboms
+
+# https://resources.sei.cmu.edu/news-events/events/sbom/participate.cfm
+
+# We need Bash 4.x or newer for this script
+if ((BASH_VERSINFO[0] < 4)); then
+    echo "🚨 Sorry, you need bash 4.0 or newer to run this script."
+    exit 1
+fi
+
+# Catch ctrl+c because we don't want to have to stab it numerous times
+# to get out of all these nested scripts when things Go Bad(TM)
+# trap ctrl-c and call ctrl_c()
+trap ctrl_c INT
+function ctrl_c() {
+    echo "💥 Trapped CTRL-C"
+    exit 99
+}
+
+# Location where the repos have been cloned
+PLUG_REPOS_DIR="${PLUG_REPOS_DIR:-./repos}"
+
+# The docker binary on this system
+PLUG_DOCKER_CMD="${PLUG_DOCKER_CMD:-/usr/bin/docker}"
+
+# The docker-compose binary on this system
+PLUG_DOCKER_COMPOSE_CMD="${PLUG_DOCKER_COMPOSE_CMD:-/home/alan/bin/docker-compose}"
+
+# The uv binary on this system
+PLUG_UV_CMD="${PLUG_UV_CMD:-/home/alan/.cargo/bin/uv}"
+
+# The location of the git binary
+PLUG_GIT_CMD="${PLUG_GIT_CMD:-/usr/bin/git}"
+
+###
+### FUNCTIONS
+###
+
+check_environment() {
+    echo "-- Check environment"
+    echo "-- Check for docker"
+    if ! PLUG_DOCKER_BIN=$(command -v $PLUG_DOCKER_CMD); then
+        echo "🚨 docker binary is not found at $PLUG_DOCKER_CMD"
+        exit 1
+    fi
+    echo "-- Check for docker-compose"
+    if ! PLUG_DOCKER_COMPOSE_BIN=$(command -v $PLUG_DOCKER_COMPOSE_CMD); then
+        echo "🚨 docker-compose binary is not found at $PLUG_DOCKER_COMPOSE_CMD"
+        exit 1
+    fi
+    echo "-- Check for uv"
+    if ! PLUG_UV_BIN=$(command -v $PLUG_UV_CMD); then
+        echo "🚨 uv binary is not found at $PLUG_UV_CMD"
+        exit 1
+    fi
+    echo "-- Check for git"
+    if ! PLUG_GIT_BIN=$(command -v $PLUG_GIT_CMD); then
+        echo "🚨 git binary is not found at $PLUG_GIT_CMD"
+        exit 1
+    fi
+}
+
+build_dependency_track() {
+    pushd dev || exit
+    sudo $PLUG_DOCKER_COMPOSE_BIN create
+    popd
+}
+
+build_phpmailer() {
+    echo "-- Is a PHP library"
+}
+
+build_gin() {
+    echo "-- Is a Go library - source sbom is fine"
+}
+
+build_httpie() {
+    $PLUG_UV_BIN venv
+    source .venv/bin/activate
+    $PLUG_UV_BIN pip install .
+    deactivate
+}
+
+build_jq() {
+    $PLUG_GIT_BIN submodule init
+    $PLUG_GIT_BIN submodule update
+    $PLUG_DOCKER_BIN build . -t plug-jq 
+}
+
+build_minecolonies() {
+    # Work around issues with extended characters in some java files within this
+    # project. Force UTF0-8 encoding when building the docs.
+    echo "javadoc { options.encoding = 'UTF-8' }" >> ./build.gradle
+    ./gradlew build
+}
+
+build_opencv() {
+    $PLUG_UV_BIN venv
+    set -e
+    source .venv/bin/activate
+    mkdir -p build
+    cd build
+    cmake .. -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF \
+        -DCMAKE_INSTALL_PREFIX=${repo_path}/usr/local/opt/opencv \
+        -DBUILD_SHARED_LIBS=ON \
+        -DBUILD_DOCS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_PACKAGE=OFF \
+        -DBUILD_PERF_TESTS=OFF -DBUILD_TESTS=OFF \
+        -DBUILD_JAVA=OFF -DBUILD_OBJC=OFF -DBUILD_FAT_JAVA_LIB=OFF -DBUILD_KOTLIN_EXTENSIONS=OFF \
+        -DWITH_IPP=OFF
+}
+
+build_hexyl() {
+    cargo build --release
+}
+
+build_nodejs_goof() {
+    docker build . -t plug-nodejs-goof
+}
+
+build_all() {
+    pushd "$PLUG_REPOS_DIR" || exit
+    for repo_path in ./*/*; do
+        echo $repo_path
+        echo "-- Build $(basename $repo_path)"
+        pushd "$repo_path" || exit
+        case "$repo_path" in
+            "./DependencyTrack/dependency-track")
+                build_dependency_track
+                ;;
+            "./PHPMailer/PHPMailer")
+                build_phpmailer
+                ;;
+            "./gin-gonic/gin")
+                build_gin
+                ;;
+            "./httpie/cli")
+                build_httpie
+                ;;
+            "./jqlang/jq")
+                build_jq
+                ;;
+            "./ldtteam/minecolonies")
+                build_minecolonies
+                ;;
+            "./opencv/opencv")
+                build_opencv
+                ;;
+            "./sharkdp/hexyl")
+                build_hexyl
+                ;;
+            "./snyk-labs/nodejs-goof")
+                build_nodejs_goof
+                ;;
+        esac
+        popd || exit
+    done
+    popd || exit
+}
+
+###
+### MAIN
+###
+
+check_environment
+build_all
